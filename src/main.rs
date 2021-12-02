@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 struct Cpu {
     memory: Box<[u8]>,
     r: Box<[u16]>,
@@ -94,11 +92,32 @@ impl Cpu {
         cpu
     }
 
+    fn read_u8(&self, address: u16) -> u8 {
+        let value = self.memory[address as usize];
+        log_read(address, value);
+        value
+    }
+
+    fn read_u16(&self, address: u16) -> u16 {
+        let value_first_half = self.memory[address as usize];
+        log_read(address, value_first_half);
+        let value_second_half = self.memory[(address + 1) as usize];
+        log_read(address + 1, value_second_half);
+        let value = (value_first_half as u16) << 8 | value_second_half as u16;
+        value
+    }
+
+    fn write_u16(&mut self, address: u16, value: u16) {
+        self.memory[address as usize] = (value >> 8) as u8;
+        log_write(address, (value >> 8) as u8);
+        self.memory[(address + 1) as usize] = value as u8;
+        log_write(address + 1, value as u8);
+    }
+
     fn fetch(&mut self) {
         println!("\n== FETCHING (PC = {:04X})\n", self.pc);
 
-        let opcode = self.memory[self.pc as usize];
-        log_read(self.pc, opcode);
+        let opcode = self.read_u8(self.pc);
 
         match opcode {
             0b00000000 => self.fetch_bz(opcode),
@@ -114,25 +133,16 @@ impl Cpu {
         println!("PC = {:X}", self.pc);
     }
 
-    fn get_immediate_u16(&mut self, start: u16) -> u16 {
-        let address_first_half = self.memory[start as usize];
-        let address_second_half = self.memory[(start + 1) as usize];
-        log_read(start, address_first_half);
-        log_read(start + 1, address_second_half);
-        return (address_first_half as u16) << 8 | (address_second_half as u16);
-    }
-
     // BZ
     fn fetch_bz(&mut self, opcode: u8) {
-        let offset = self.memory[(self.pc + 1) as usize];
-        log_read(self.pc + 1, offset);
+        let offset = self.read_u8(self.pc + 1);
         self.ir = (opcode as u32) << 24 | (offset as u32) << 16;
         self.pc += 2;
     }
 
     // JMP, JSR
     fn fetch_jump(&mut self, opcode: u8) {
-        let address = self.get_immediate_u16(self.pc + 1);
+        let address = self.read_u16(self.pc + 1);
         self.ir = (opcode as u32) << 24 | (address as u32) << 8;
         self.pc += 3;
     }
@@ -144,8 +154,7 @@ impl Cpu {
     }
 
     fn fetch_addressfull(&mut self, opcode: u8) {
-        let addr_mode = self.memory[(self.pc + 1) as usize];
-        log_read(self.pc + 1, addr_mode);
+        let addr_mode = self.read_u8(self.pc + 1);
         let bit7 = addr_mode >> 7;
 
         if bit7 == 0 {
@@ -157,12 +166,11 @@ impl Cpu {
             let addressing = addr_mode >> 5;
             // memory direct or memory indirect
             if addressing == 0b101 || addressing == 0b110 || addressing == 0b111 {
-                let address = self.get_immediate_u16(self.pc + 2);
+                let address = self.read_u16(self.pc + 2);
                 self.ir = (opcode as u32) << 24 | (addr_mode as u32) << 16 | address as u32;
                 self.pc += 4;
             } else if addressing == 0b100 {
-                let offset = self.memory[(self.pc + 2) as usize];
-                log_read(self.pc + 2, offset);
+                let offset = self.read_u8(self.pc + 2);
                 self.ir = (opcode as u32) << 24 | (addr_mode as u32) << 16 | (offset as u32) << 8;
                 self.pc += 3;
             } else {
@@ -177,7 +185,7 @@ impl Cpu {
         let opcode = (self.ir >> 24) as u8;
         let addr_mode = (self.ir >> 16) as u8;
         let addressing = addr_mode >> 5;
-        // println!("opcode {:b}, addr_mode {:b}, addressing {:b}", opcode, addr_mode, addressing);
+
         match opcode {
             // addressfull instructions
             0b11000000 | 0b11000001 |
@@ -202,11 +210,7 @@ impl Cpu {
         let address_of_address = self.ir as u16;
 
         println!("Reading address");
-        let address_first_half = self.memory[address_of_address as usize];
-        log_read(address_of_address, address_first_half);
-        let address_second_half = self.memory[(address_of_address + 1) as usize];
-        log_read(address_of_address + 1, address_second_half);
-        let address = (address_first_half as u16) << 8 | address_second_half as u16;
+        let address = self.read_u16(address_of_address);
 
         // TODO: maybe move this up or down
         // check for ST
@@ -215,11 +219,7 @@ impl Cpu {
         }
 
         println!("Reading operand");
-        let operand_first_half = self.memory[address as usize];
-        log_read(address, operand_first_half);
-        let operand_second_half = self.memory[(address + 1) as usize];
-        log_read(address + 1, operand_second_half);
-        let operand = (operand_first_half as u16) << 8 | operand_second_half as u16;
+        let operand = self.read_u16(address);
 
         println!("Operand: {:04X}", operand);
         self.b = operand;
@@ -243,11 +243,7 @@ impl Cpu {
         }
 
         println!("Reading operand");
-        let operand_first_half = self.memory[self.r[reg_idx] as usize];
-        log_read(self.r[reg_idx], operand_first_half);
-        let operand_second_half = self.memory[(self.r[reg_idx] + 1) as usize];
-        log_read(self.r[reg_idx] + 1, operand_second_half);
-        let operand = (operand_first_half as u16) << 8 | operand_second_half as u16;
+        let operand = self.read_u16(self.r[reg_idx]);
 
         println!("Operand: {:04X}", operand);
         self.b = operand; // TODO: remove mofifying b for st
@@ -267,11 +263,7 @@ impl Cpu {
         println!("Address is {:04X}", address);
 
         println!("Reading operand");
-        let operand_first_half = self.memory[address as usize];
-        log_read(address, operand_first_half);
-        let operand_second_half = self.memory[(address + 1) as usize];
-        log_read(address + 1, operand_second_half);
-        let operand = (operand_first_half as u16) << 8 | operand_second_half as u16;
+        let operand = self.read_u16(address);
 
         println!("Operand: {:04X}", operand);
         self.b = operand;
@@ -297,12 +289,7 @@ impl Cpu {
         let offset = ((self.ir >> 8) as i8) as i16;
 
         let operand_address = (self.r[reg_idx] as i16 + offset) as u16;
-
-        let operand_first_half = self.memory[operand_address as usize];
-        log_read(operand_address, operand_first_half);
-        let operand_second_half = self.memory[(operand_address + 1) as usize];
-        log_read(operand_address + 1, operand_second_half);
-        let operand = (operand_first_half as u16) << 8 | operand_second_half as u16;
+        let operand = self.read_u16(operand_address);
 
         println!("Operand: {:04X}", operand);
         self.b = operand;
@@ -344,39 +331,23 @@ impl Cpu {
         match addressing {
             // register indirect with preincrement
             0b011 => {
-                let first_byte = (self.a >> 8) as u8;
-                let second_byte = self.a as u8;
                 let reg_idx = ((self.ir >> 16) & 0b11111) as usize; // which of r registers to use
-                self.memory[self.r[reg_idx] as usize] = first_byte;
-                log_write(self.r[reg_idx], first_byte);
-                self.memory[(self.r[reg_idx] + 1) as usize] = second_byte;
-                log_write(self.r[reg_idx] + 1, second_byte);
+                self.write_u16(self.r[reg_idx], self.a);
             }
 
             // memory direct
             0b101 => {
                 let address = self.ir as u16;
-                self.memory[address as usize] = (self.a >> 8) as u8;
-                log_write(address, (self.a >> 8) as u8);
-                let address = address + 1;
-                self.memory[address as usize] = self.a as u8;
-                log_write(address, self.a as u8);
+                self.write_u16(address, self.a);
             }
 
             // register indirect with offset
             0b100 => {
-                let first_byte = (self.a >> 8) as u8;
-                let second_byte = self.a as u8;
                 let reg_idx = ((self.ir >> 16) & 0b11111) as usize; // which of r registers to use
-
                 let offset = ((self.ir >> 8) as i8) as i16;
                 let operand_address = (self.r[reg_idx] as i16 + offset) as u16;
 
-                self.memory[operand_address as usize] = first_byte;
-                log_write(operand_address, first_byte);
-                let operand_address = operand_address + 1;
-                self.memory[operand_address as usize] = second_byte;
-                log_write(operand_address, second_byte);
+                self.write_u16(operand_address, self.a);
             }
 
             _ => (),
